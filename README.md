@@ -39,7 +39,8 @@ paws-on-mcp/
 └── README.md                 # This file
 ```
 
-## 🚀 Quick Start
+<details>
+<summary><h2>🚀 Quick Start</h2></summary>
 
 ### Installation
 
@@ -132,10 +133,13 @@ python mcp_cli_client.py resource hackernews://top/10
 python mcp_cli_client.py resource github://trending/python/daily
 python mcp_cli_client.py resource sampling://repositories/python/3
 ```
+</details>
 
-## ✨ Complete MCP Feature Set
+<details>
+<summary><h2>✨ Complete MCP Feature Set</h2></summary>
 
-### 🔧 Tools (9 Available - All Working ✅)
+<details>
+<summary><h3>🔧 Tools (9 Available - All Working ✅)</h3></summary>
 
 **Core Data Tools:**
 1. **`search_hackernews`** - Search HackerNews stories
@@ -149,8 +153,10 @@ python mcp_cli_client.py resource sampling://repositories/python/3
 6. **`analyze_hackernews_trends_with_ai`** - AI trend analysis
 7. **`code_review_with_ai`** - AI-powered code review
 8. **`request_client_roots`** - Request client file system access
+</details>
 
-### 🗂️ Resources (15 Available - All Working ✅)
+<details>
+<summary><h3>🗂️ Resources (15 Available - All Working ✅)</h3></summary>
 
 **HackerNews Resources:**
 - `hackernews://top/5` & `hackernews://top/10` - Top stories
@@ -173,8 +179,10 @@ python mcp_cli_client.py resource sampling://repositories/python/3
 - `roots://` - Available roots listing
 - `analysis://hackernews/AI/5` - HackerNews AI analysis
 - `analysis://github/microsoft/vscode` - GitHub repository analysis
+</details>
 
-### 📝 Prompt Templates (14 Available - All Working ✅)
+<details>
+<summary><h3>📝 Prompt Templates (14 Available - All Working ✅)</h3></summary>
 
 1. **`analyze_tech_trends`** - Technology trend analysis
    - Variants: AI (Default), Blockchain (Weekly), Cloud Computing (Brief)
@@ -186,8 +194,10 @@ python mcp_cli_client.py resource sampling://repositories/python/3
    - Variants: Python, Machine Learning (Advanced), DevOps (Intermediate)
 5. **`code_review_assistant`** - Code review guidance
    - Variants: General, Python Security, JavaScript Performance
+</details>
 
-### 🧠 Enhanced Sampling (Working with Model Preferences ✅)
+<details>
+<summary><h3>🧠 Enhanced Sampling (Working with Model Preferences ✅)</h3></summary>
 
 **MCP 2025-03-26 Sampling Features:**
 - ✅ **Model Preferences** - Intelligence (0.8), Cost (0.3), Speed priorities
@@ -203,8 +213,11 @@ python mcp_cli_client.py resource sampling://repositories/python/3
    Status: ready_for_client
    Model prefs: Intelligence=0.9, Cost=0.2
 ```
+</details>
+</details>
 
-## 🏗️ Architecture
+<details>
+<summary><h2>🏗️ Architecture</h2></summary>
 
 ### MCP 2025-03-26 Implementation
 
@@ -240,8 +253,10 @@ python mcp_cli_client.py resource sampling://repositories/python/3
 - **Rich CLI Client**: Comprehensive testing and interaction capabilities
 - **Error Handling**: Robust error handling with structured responses
 - **Performance**: Async/await patterns for high-performance operation
+</details>
 
-## 🔧 Development & Testing
+<details>
+<summary><h2>🔧 Development & Testing</h2></summary>
 
 ### Running Individual Tests
 
@@ -289,8 +304,10 @@ request_client_roots                ✅ PASSED
 
 Tools Tests: 9/9 passed
 ```
+</details>
 
-## 📚 Usage Examples
+<details>
+<summary><h2>📚 Usage Examples</h2></summary>
 
 ### Enhanced Sampling with Model Preferences
 
@@ -346,12 +363,12 @@ python mcp_cli_client.py prompt code_review_assistant --args '{
   "project_context": "enterprise"
 }'
 ```
+</details>
 
 ## 📚 Documentation
 
 - **[Technical Architecture](docs/architecture.md)**: Detailed system design and implementation
 - **[CLI Guide](docs/CLI_README.md)**: Command-line interface usage
-- **[Development Blog](docs/blog.md)**: Development process and insights
 
 ## 🔗 MCP Specification Compliance
 
