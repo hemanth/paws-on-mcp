@@ -71,8 +71,9 @@ class TestMCPClient(unittest.TestCase):
         init_payload = init_call[1]['json']
         
         self.assertEqual(init_payload['method'], 'initialize')
-        self.assertEqual(init_payload['params']['protocolVersion'], '2024-11-05')
+        self.assertEqual(init_payload['params']['protocolVersion'], '2025-03-26')
         self.assertIn('capabilities', init_payload['params'])
+        self.assertIn('elicitation', init_payload['params']['capabilities'])
         
         # Verify session was established
         self.assertEqual(client.session_id, 'test-session-123')
@@ -317,6 +318,181 @@ class TestMCPClient(unittest.TestCase):
             self.assertIn('content', result)
             self.assertEqual(result['role'], 'assistant')
 
+    @patch('mcp_cli_client.requests.Session')
+    @patch('builtins.input')
+    def test_handle_elicitation_request_accept(self, mock_input, mock_session_class):
+        """Test handling elicitation request with user acceptance."""
+        mock_session_class.return_value = self.mock_session
+        client = MCPClient("http://test-server:8000")
+
+        elicitation_req_data = {
+            "message": "Please provide your username",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {
+                    "username": {"type": "string", "title": "Username"}
+                },
+                "required": ["username"]
+            }
+        }
+        # Simulate user input: username, then 'yes' to confirm
+        mock_input.side_effect = ["testuser", "yes"]
+
+        with patch('mcp_cli_client.console.print') as mock_console_print:
+            response = client.handle_elicitation_request(elicitation_req_data)
+
+        self.assertEqual(response['action'], 'accept')
+        self.assertIn('content', response)
+        self.assertEqual(response['content']['username'], 'testuser')
+        # Check that prints happened (panel, prompt, confirmation)
+        self.assertGreaterEqual(mock_console_print.call_count, 3)
+
+
+    @patch('mcp_cli_client.requests.Session')
+    @patch('builtins.input', side_effect=["", "no"]) # User provides no username, then "no" to final confirm
+    def test_handle_elicitation_request_reject(self, mock_input, mock_session_class):
+        """Test handling elicitation request with user rejection."""
+        # Store original post from setUp
+        original_post = self.mock_session.post
+        # Create client, which calls initialize and initialized (2 post calls)
+        mock_session_class.return_value = self.mock_session
+        client = MCPClient("http://test-server:8000")
+        # Restore original post if it was modified by client init, or ensure subsequent calls are fine
+        self.mock_session.post = original_post
+
+
+        elicitation_req_data = {
+            "message": "Please provide your username",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {"username": {"type": "string", "title": "Username"}} # Added title for prompt
+            }
+        }
+
+        with patch('mcp_cli_client.console.print'): # Mock print to avoid output clutter
+            response = client.handle_elicitation_request(elicitation_req_data)
+
+        self.assertEqual(response['action'], 'reject')
+        self.assertNotIn('content', response)
+
+    @patch('mcp_cli_client.requests.Session')
+    @patch('builtins.input', side_effect=["", "cancel"]) # User provides no username, then "cancel" to final confirm
+    def test_handle_elicitation_request_cancel(self, mock_input, mock_session_class):
+        """Test handling elicitation request with user cancellation."""
+        original_post = self.mock_session.post
+        mock_session_class.return_value = self.mock_session
+        client = MCPClient("http://test-server:8000")
+        self.mock_session.post = original_post
+
+
+        elicitation_req_data = {
+            "message": "Please provide your username",
+            "requestedSchema": {
+                "type": "object",
+                "properties": {"username": {"type": "string", "title": "Username"}} # Added title for prompt
+            }
+        }
+
+        with patch('mcp_cli_client.console.print'):
+            response = client.handle_elicitation_request(elicitation_req_data)
+
+        self.assertEqual(response['action'], 'cancel')
+        self.assertNotIn('content', response)
+
+    @patch('mcp_cli_client.requests.Session')
+    @patch('builtins.input')
+    def test_make_request_with_elicitation(self, mock_input, mock_session_class):
+        """Test _make_request when server returns an elicitation request."""
+
+        # Mock for the initial MCPClient() call which does initialize and initialized
+        mock_init_response = Mock()
+        mock_init_response.status_code = 200
+        mock_init_response.headers = {'mcp-session-id': 'test-session-elicitation'}
+        init_data = {
+            "jsonrpc": "2.0", "id": "init", "result": {
+                "protocolVersion": "2025-03-26", "serverInfo": {"name": "test-server"}
+            }
+        }
+        mock_init_response.text = f"data: {json.dumps(init_data)}\n\n"
+
+        mock_initialized_notif_response = Mock()
+        mock_initialized_notif_response.status_code = 200
+        mock_initialized_notif_response.text = "" # No data expected for notification response
+
+
+        # 1. Initial request that will trigger elicitation
+        initial_tool_response_with_elicitation = {
+            "jsonrpc": "2.0",
+            "id": "initial-id",
+            "result": {
+                "elicitation_request": {
+                    "message": "Provide your API key",
+                    "requestedSchema": {
+                        "type": "object",
+                        "properties": {"api_key": {"type": "string", "title": "API Key"}},
+                        "required": ["api_key"]
+                    }
+                }
+                # No actual tool result here, as elicitation is pending
+            }
+        }
+
+        # 2. Server's response after client sends elicitation/response
+        final_tool_response_after_elicitation = {
+            "jsonrpc": "2.0",
+            "id": "elicitation-response-id", # Different ID from server
+            "result": {
+                "content": [{"type": "text", "text": "Tool executed with API key"}]
+            }
+        }
+
+        # Mock for the _make_request call itself (tools/call)
+        mock_response_elicitation_trigger = Mock()
+        mock_response_elicitation_trigger.status_code = 200
+        mock_response_elicitation_trigger.text = f"data: {json.dumps(initial_tool_response_with_elicitation)}\n\n"
+
+        # Mock for the client's elicitation/response call
+        mock_response_after_elicitation_submit = Mock()
+        mock_response_after_elicitation_submit.status_code = 200
+        mock_response_after_elicitation_submit.text = f"data: {json.dumps(final_tool_response_after_elicitation)}\n\n"
+
+        # Set up the mock session for this specific test
+        # MCPClient() will make two post calls: initialize, notifications/initialized
+        # Then client.call_tool will make one: tools/call (triggers elicitation)
+        # Then _make_request will make another one: elicitation/response
+        mock_session_instance = MagicMock()
+        mock_session_instance.post.side_effect = [
+            mock_init_response,                     # For initialize
+            mock_initialized_notif_response,        # For notifications/initialized
+            mock_response_elicitation_trigger,      # For the initial tools/call
+            mock_response_after_elicitation_submit  # For the elicitation/response post
+        ]
+        mock_session_class.return_value = mock_session_instance
+
+        # Create client AFTER fully setting up the mock_session_instance
+        client = MCPClient("http://test-server:8000")
+
+        # Simulate user input for elicitation: API key, then 'yes' to confirm
+        mock_input.side_effect = ["mysecretkey", "yes"]
+
+        with patch('mcp_cli_client.console.print') as mock_console_print:
+            result = client.call_tool("some_tool_requiring_key", {})
+
+        self.assertIn('content', result)
+        self.assertEqual(result['content'][0]['text'], "Tool executed with API key")
+
+        # Check that all expected POST calls were made
+        self.assertEqual(mock_session_instance.post.call_count, 4)
+
+        # Verify details of the elicitation/response call (the 4th call)
+        elicitation_call_args = mock_session_instance.post.call_args_list[3] # 0-indexed
+        elicitation_payload = elicitation_call_args[1]['json']
+
+        self.assertEqual(elicitation_payload['method'], 'elicitation/response')
+        self.assertEqual(elicitation_payload['params']['action'], 'accept')
+        self.assertEqual(elicitation_payload['params']['content']['api_key'], 'mysecretkey')
+        mock_console_print.assert_called() # For elicitation UI
+
 
 class TestCLIFunctions(unittest.TestCase):
     """Test cases for CLI display and interaction functions."""
@@ -527,120 +703,121 @@ class TestCLICommands(unittest.TestCase):
         # Should print error about invalid JSON
         mock_print.assert_called()
     
-    @patch('mcp_cli_client.MCPClient')
-    @patch('mcp_cli_client.test_comprehensive_mcp_features')
-    def test_main_test_comprehensive_command(self, mock_test, mock_client_class):
+    # @patch('mcp_cli_client.MCPClient')
+    # @patch('mcp_cli_client.test_comprehensive_mcp_features') # This function is removed
+    def test_main_test_comprehensive_command(self, mock_test=None, mock_client_class=None): # Params made optional
         """Test 'test-comprehensive' command."""
-        mock_client = Mock()
-        mock_client_class.return_value = mock_client
+        # mock_client = Mock()
+        # mock_client_class.return_value = mock_client
         
-        with patch('sys.argv', ['mcp_cli_client.py', 'test-comprehensive']):
-            mcp_cli_client.main()
+        # with patch('sys.argv', ['mcp_cli_client.py', 'test-comprehensive']):
+        #     mcp_cli_client.main()
         
-        mock_test.assert_called_once_with(mock_client)
+        # # mock_test.assert_called_once_with(mock_client) # This function was removed
+        pass
 
 
-class TestTestFunctions(unittest.TestCase):
-    """Test cases for the testing functions in the CLI client."""
-    
-    def setUp(self):
-        """Set up test fixtures."""
-        self.mock_client = Mock(spec=MCPClient)
-    
-    @patch('mcp_cli_client.console.print')
-    def test_test_all_resources(self, mock_print):
-        """Test the test_all_resources function."""
-        self.mock_client.list_resources.return_value = [
-            {
-                "uri": "hackernews://top/3",
-                "name": "Top Stories",
-                "description": "Get top HackerNews stories"
-            }
-        ]
-        
-        self.mock_client.get_resource.return_value = {
-            "contents": [
-                {
-                    "uri": "hackernews://top/3",
-                    "mimeType": "application/json",
-                    "text": "[{\"title\": \"Test Story\", \"score\": 100}]"
-                }
-            ]
-        }
-        
-        mcp_cli_client.test_all_resources(self.mock_client)
-        
-        # Should list and test resources
-        self.mock_client.list_resources.assert_called_once()
-        self.mock_client.get_resource.assert_called_once_with("hackernews://top/3")
-        mock_print.assert_called()
-    
-    @patch('mcp_cli_client.console.print')
-    def test_test_all_resources_empty(self, mock_print):
-        """Test test_all_resources with no resources."""
-        self.mock_client.list_resources.return_value = []
-        
-        mcp_cli_client.test_all_resources(self.mock_client)
-        
-        self.mock_client.list_resources.assert_called_once()
-        mock_print.assert_called()
-    
-    @patch('mcp_cli_client.console.print')
-    def test_test_all_roots(self, mock_print):
-        """Test the test_all_roots function."""
-        self.mock_client.list_roots.return_value = [
-            {
-                "uri": "sampling://ai-analysis",
-                "name": "AI Analysis Root",
-                "description": "Root for AI analysis sampling"
-            }
-        ]
-        
-        self.mock_client.read_root.return_value = {
-            "contents": [
-                {
-                    "uri": "sampling://ai-analysis",
-                    "mimeType": "application/json",
-                    "text": "{\"capability\": \"analysis\"}"
-                }
-            ]
-        }
-        
-        mcp_cli_client.test_all_roots(self.mock_client)
-        
-        # Should list and test roots
-        self.mock_client.list_roots.assert_called_once()
-        self.mock_client.read_root.assert_called_once_with("sampling://ai-analysis")
-        mock_print.assert_called()
-    
-    @patch('mcp_cli_client.console.print')
-    def test_test_comprehensive_mcp_features(self, mock_print):
-        """Test comprehensive MCP feature testing."""
-        # Mock all the client methods
-        self.mock_client.list_tools.return_value = [{"name": "test_tool"}]
-        self.mock_client.list_resources.return_value = [{"uri": "test://resource"}]
-        self.mock_client.list_roots.return_value = [{"uri": "test://root"}]
-        self.mock_client.list_prompts.return_value = [{"name": "test_prompt"}]
-        
-        self.mock_client.call_tool.return_value = {
-            "content": [{"type": "text", "text": "Success"}]
-        }
-        
-        self.mock_client.get_resource.return_value = {
-            "contents": [{"text": "Resource content"}]
-        }
-        
-        self.mock_client.get_prompt.return_value = {
-            "messages": [{"role": "user", "content": {"type": "text", "text": "Test prompt"}}]
-        }
-        
-        mcp_cli_client.test_comprehensive_mcp_features(self.mock_client)
-        
-        # Should call various client methods
-        self.mock_client.list_tools.assert_called()
-        self.mock_client.list_resources.assert_called()
-        self.mock_client.call_tool.assert_called()
-        mock_print.assert_called()
+# class TestTestFunctions(unittest.TestCase):
+#     """Test cases for the testing functions in the CLI client."""
+
+#     def setUp(self):
+#         """Set up test fixtures."""
+#         self.mock_client = Mock(spec=MCPClient)
+
+#     @patch('mcp_cli_client.console.print')
+#     def test_test_all_resources(self, mock_print):
+#         """Test the test_all_resources function."""
+#         self.mock_client.list_resources.return_value = [
+#             {
+#                 "uri": "hackernews://top/3",
+#                 "name": "Top Stories",
+#                 "description": "Get top HackerNews stories"
+#             }
+#         ]
+
+#         self.mock_client.get_resource.return_value = {
+#             "contents": [
+#                 {
+#                     "uri": "hackernews://top/3",
+#                     "mimeType": "application/json",
+#                     "text": "[{\"title\": \"Test Story\", \"score\": 100}]"
+#                 }
+#             ]
+#         }
+
+#         mcp_cli_client.test_all_resources(self.mock_client)
+
+#         # Should list and test resources
+#         self.mock_client.list_resources.assert_called_once()
+#         self.mock_client.get_resource.assert_called_once_with("hackernews://top/3")
+#         mock_print.assert_called()
+
+#     @patch('mcp_cli_client.console.print')
+#     def test_test_all_resources_empty(self, mock_print):
+#         """Test test_all_resources with no resources."""
+#         self.mock_client.list_resources.return_value = []
+
+#         mcp_cli_client.test_all_resources(self.mock_client)
+
+#         self.mock_client.list_resources.assert_called_once()
+#         mock_print.assert_called()
+
+#     @patch('mcp_cli_client.console.print')
+#     def test_test_all_roots(self, mock_print):
+#         """Test the test_all_roots function."""
+#         self.mock_client.list_roots.return_value = [
+#             {
+#                 "uri": "sampling://ai-analysis",
+#                 "name": "AI Analysis Root",
+#                 "description": "Root for AI analysis sampling"
+#             }
+#         ]
+
+#         self.mock_client.read_root.return_value = {
+#             "contents": [
+#                 {
+#                     "uri": "sampling://ai-analysis",
+#                     "mimeType": "application/json",
+#                     "text": "{\"capability\": \"analysis\"}"
+#                 }
+#             ]
+#         }
+
+#         mcp_cli_client.test_all_roots(self.mock_client)
+
+#         # Should list and test roots
+#         self.mock_client.list_roots.assert_called_once()
+#         self.mock_client.read_root.assert_called_once_with("sampling://ai-analysis")
+#         mock_print.assert_called()
+
+#     @patch('mcp_cli_client.console.print')
+#     def test_test_comprehensive_mcp_features(self, mock_print):
+#         """Test comprehensive MCP feature testing."""
+#         # Mock all the client methods
+#         self.mock_client.list_tools.return_value = [{"name": "test_tool"}]
+#         self.mock_client.list_resources.return_value = [{"uri": "test://resource"}]
+#         self.mock_client.list_roots.return_value = [{"uri": "test://root"}]
+#         self.mock_client.list_prompts.return_value = [{"name": "test_prompt"}]
+
+#         self.mock_client.call_tool.return_value = {
+#             "content": [{"type": "text", "text": "Success"}]
+#         }
+
+#         self.mock_client.get_resource.return_value = {
+#             "contents": [{"text": "Resource content"}]
+#         }
+
+#         self.mock_client.get_prompt.return_value = {
+#             "messages": [{"role": "user", "content": {"type": "text", "text": "Test prompt"}}]
+#         }
+
+#         mcp_cli_client.test_comprehensive_mcp_features(self.mock_client)
+
+#         # Should call various client methods
+#         self.mock_client.list_tools.assert_called()
+#         self.mock_client.list_resources.assert_called()
+#         self.mock_client.call_tool.assert_called()
+#         mock_print.assert_called()
 
 
 class TestInteractiveMode(unittest.TestCase):
@@ -744,7 +921,7 @@ def run_cli_client_tests():
         TestMCPClient,
         TestCLIFunctions,
         TestCLICommands,
-        TestTestFunctions,
+        # TestTestFunctions, # This class has been commented out
         TestInteractiveMode,
         TestErrorHandling
     ]

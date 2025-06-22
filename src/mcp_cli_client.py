@@ -7,6 +7,7 @@ A command-line interface for interacting with MCP servers using the official MCP
 
 import argparse
 import json
+import re
 import sys
 import requests
 import textwrap
@@ -45,7 +46,8 @@ class MCPClient:
                 "params": {
                     "protocolVersion": "2025-03-26",
                     "capabilities": {
-                        "sampling": {}
+                        "sampling": {},
+                        "elicitation": {}
                     },
                     "clientInfo": {
                         "name": "mcp-cli-client",
@@ -129,11 +131,50 @@ class MCPClient:
             response = self.session.post(self.server_url, json=payload, headers=headers, timeout=10)
             
             if response.status_code == 200:
-                result = self._parse_sse_response(response.text)
-                if result:
-                    if "error" in result:
-                        raise Exception(f"Server error: {result['error']}")
-                    return result.get("result", {})
+                parsed_response = self._parse_sse_response(response.text)
+                if parsed_response:
+                    if "error" in parsed_response:
+                        raise Exception(f"Server error: {parsed_response['error']}")
+
+                    result = parsed_response.get("result", {})
+
+                    # Check for elicitation request
+                    if "elicitation_request" in result:
+                        elicitation_response = self.handle_elicitation_request(result["elicitation_request"])
+
+                        # Send elicitation response back to server
+                        elicitation_payload = {
+                            "jsonrpc": "2.0",
+                            "id": str(uuid.uuid4()), # New ID for this specific response
+                            "method": "elicitation/response", # Assuming this is the method name
+                            "params": elicitation_response
+                        }
+                        # Re-use existing headers, including MCP-Session-ID
+                        elicitation_http_response = self.session.post(self.server_url, json=elicitation_payload, headers=headers, timeout=10)
+
+                        if elicitation_http_response.status_code == 200:
+                            # Server might send a new result after elicitation, or just an ack
+                            # For now, we assume the original flow continues or a new result is in this response
+                            final_parsed_response = self._parse_sse_response(elicitation_http_response.text)
+                            if final_parsed_response:
+                                if "error" in final_parsed_response:
+                                    raise Exception(f"Server error after elicitation: {final_parsed_response['error']}")
+                                return final_parsed_response.get("result", {}) # Return new result
+                            else: # If no data in elicitation response, return original result if appropriate
+                                # This part might need adjustment based on server behavior
+                                if elicitation_response.get("action") == "accept":
+                                     # If accepted, we expect the server to continue and provide the actual result of the original request
+                                     # The server's response to elicitation/response should contain the actual data
+                                     pass # Fall through to return the result from elicitation_http_response
+                                else: # If rejected or cancelled, what should be returned?
+                                      # For now, let's assume the server sends a specific response for this.
+                                      # If not, we might need to return a custom client-side message or the original parsed_response's result
+                                      return {"elicitation_status": elicitation_response.get("action")}
+
+                        else:
+                            raise Exception(f"Elicitation response failed: {elicitation_http_response.status_code} - {elicitation_http_response.text}")
+
+                    return result # Return original result if no elicitation
                 else:
                     raise Exception("Failed to parse response")
             else:
@@ -280,6 +321,138 @@ class MCPClient:
                 "outputTokens": 50
             }
         }
+
+    def handle_elicitation_request(self, elicitation_request: Dict[str, Any]) -> Dict[str, Any]:
+        """Handle an elicitation request from the server."""
+        message = elicitation_request.get("message", "The server is requesting additional information.")
+        requested_schema = elicitation_request.get("requestedSchema", {})
+        properties = requested_schema.get("properties", {})
+        required_fields = requested_schema.get("required", [])
+
+        console.print(Panel(f"[bold yellow]📝 Elicitation Request[/]\n\n{message}", title="MCP Elicitation Request", expand=False))
+
+        content = {}
+        action = "accept"  # Default to accept
+
+        if not properties:
+            # Simple confirmation if no schema is provided
+            user_input = input("Do you want to proceed? (yes/no/cancel): ").strip().lower()
+            if user_input == "yes":
+                action = "accept"
+            elif user_input == "no":
+                action = "reject"
+            else:
+                action = "cancel"
+            return {"action": action}
+
+        for prop_name, prop_details in properties.items():
+            while True:
+                prompt_text = f"[cyan]{prop_details.get('title', prop_name)}[/]"
+                if prop_details.get('description'):
+                    prompt_text += f" ({prop_details['description']})"
+                if prop_name in required_fields:
+                    prompt_text += " [required]"
+
+                user_input = input(f"{prompt_text}: ").strip()
+
+                if not user_input and prop_name in required_fields:
+                    console.print("[yellow]This field is required. Type 'cancel' to cancel the request.[/]")
+                    continue
+                elif not user_input and prop_details.get('default') is not None:
+                    content[prop_name] = prop_details['default']
+                    break
+                elif not user_input:
+                    break # Optional field, user skipped
+
+                if user_input.lower() == "cancel":
+                    action = "cancel"
+                    return {"action": action} # Exit immediately if user cancels
+
+                # Validate and convert input
+                prop_type = prop_details.get("type")
+                validation_error = None
+
+                if prop_type == "string":
+                    min_length = prop_details.get("minLength")
+                    max_length = prop_details.get("maxLength")
+                    pattern = prop_details.get("pattern")
+                    # TODO: Add format validation (email, uri, date, date-time)
+
+                    if min_length is not None and len(user_input) < min_length:
+                        validation_error = f"Minimum length is {min_length}."
+                    elif max_length is not None and len(user_input) > max_length:
+                        validation_error = f"Maximum length is {max_length}."
+                    elif pattern and not re.match(pattern, user_input):
+                        validation_error = f"Input does not match pattern: {pattern}."
+                    else:
+                        content[prop_name] = user_input
+
+                elif prop_type == "number" or prop_type == "integer":
+                    try:
+                        if prop_type == "integer":
+                            num_value = int(user_input)
+                        else:
+                            num_value = float(user_input)
+
+                        minimum = prop_details.get("minimum")
+                        maximum = prop_details.get("maximum")
+
+                        if minimum is not None and num_value < minimum:
+                            validation_error = f"Minimum value is {minimum}."
+                        elif maximum is not None and num_value > maximum:
+                            validation_error = f"Maximum value is {maximum}."
+                        else:
+                            content[prop_name] = num_value
+                    except ValueError:
+                        validation_error = "Invalid number format."
+
+                elif prop_type == "boolean":
+                    if user_input.lower() in ["true", "yes", "1", "on"]:
+                        content[prop_name] = True
+                    elif user_input.lower() in ["false", "no", "0", "off"]:
+                        content[prop_name] = False
+                    else:
+                        validation_error = "Invalid boolean value (true/false, yes/no)."
+
+                elif prop_type == "string" and "enum" in prop_details:
+                    if user_input in prop_details["enum"]:
+                        content[prop_name] = user_input
+                    else:
+                        allowed_values = ", ".join(prop_details["enum"])
+                        validation_error = f"Invalid value. Allowed values are: {allowed_values}."
+
+                else: # Fallback for unknown types, treat as string
+                    content[prop_name] = user_input
+
+
+                if validation_error:
+                    console.print(f"[yellow]Validation Error: {validation_error} Please try again or type 'cancel'.[/]")
+                else:
+                    break # Input is valid for this property
+
+            if action == "cancel": # Check again if inner loop resulted in cancel
+                break
+
+        if action == "cancel":
+            return {"action": "cancel"}
+
+        # Final confirmation from user
+        console.print("\n[bold]You entered:[/]")
+        for k, v in content.items():
+            console.print(f"  [cyan]{k}:[/] {v}")
+
+        final_action_input = input("Submit this information? (yes/no/cancel): ").strip().lower()
+        if final_action_input == "yes":
+            action = "accept"
+        elif final_action_input == "no":
+            action = "reject"
+        else:
+            action = "cancel"
+
+        if action == "accept":
+            return {"action": "accept", "content": content}
+        else:
+            return {"action": action}
 
 def display_server_info(client: MCPClient) -> None:
     """Display information about the connected MCP server."""
