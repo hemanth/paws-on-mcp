@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/hemanth-paws-on-mcp-badge.png)](https://mseep.ai/app/hemanth-paws-on-mcp)
+
 # Paws-on-MCP: Unified MCP Server Implementation 🐾
 
 A comprehensive Model Context Protocol (MCP) server implementing the latest **MCP 2025-03-26 specification**. Demonstrates MCP capabilities including tools, resources, prompts, roots, and enhanced sampling with model preferences. Features HackerNews and GitHub API integrations with AI-powered analysis through advanced MCP sampling.
